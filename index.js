@@ -54,13 +54,9 @@ app.on('ready', function() {
         win_a.webContents.send('heythere', 'whoooooooh!');
     });
 
-
-
-
-
-
     // // Open the DevTools.
     win_a.openDevTools();
+    win_b.openDevTools();
 
 
     // anotherWindow = new BrowserWindow({width: 800, height: 600});

@@ -8,16 +8,22 @@ var uuid = require('node-uuid'),
 	EventEmitter = require('events');
 
 class Connection extends EventEmitter {
-	constructor (ipc){
+	constructor (ipc, name = ''){
 		super();
 		this.ipc = ipc;
 		this.id = uuid.v4();
+		this.name = name;
 
 		ipc.sendSync('/register', {
 			id: this.id,
-			data: null
+			data: {
+				meta: {
+					name: this.name,
+					id: this.id,
+					version: process.versions.electron
+				}
+			}
 		});
-
 	} 
 
 	on(chan, cb){
@@ -26,9 +32,7 @@ class Connection extends EventEmitter {
 			data: chan
 		});
 
-		ipc.on(chan, (evnt, arg)=>{
-			cb(evnt, arg);
-		});
+		ipc.on(this.id + '/' + chan, cb);
 	}
 
 	emit(chan, data) {
@@ -40,57 +44,93 @@ class Connection extends EventEmitter {
 			}
 		});
 	}
+
+	removeListener(chan, callback) {
+		ipc.sendSync('/unsub', {
+			id: this.id,
+			data: {
+				chan
+			}
+		});
+
+		ipc.removeListener(chan, callback);
+	}
+
+	listConnections(){
+		return ipc.sendSync('/list-connections');
+	}
 }
-
-// class MessagePayload {
-// 	constructor(){
-// 		this.
-// 	}
-// }
-
-
-
-// class Bus {
-// 	Connection (ipc){
-// 		return 
-// 	}
-
-// 	this.types =  {
-// 		MULTI: 'multi'
-// 	}
-// }
 
 
 class Server extends EventEmitter {
 
     constructor(ipc) {
     	super();
+
+    	//a store of meta info (used for resolving names?)
+    	this.connectionList = [];
         
         ipc.on('/register', (evnt, arg) => {
             console.log('register', arg);
+            this.connectionList.push(arg.data.meta);
+            console.log(this.connectionList);
             evnt.returnValue = true;
         });
 
+        ipc.on('/unsub', (evnt, arg) => {
+            //console.log('unregister', arg, evnt.sender.getId(), '/pub/'+arg.data.chan);
+            evnt.returnValue = true;
+
+            let listener = this.listeners('/pub/'+arg.data.chan).filter(listener =>{
+            	return listener(null,1) === arg.id
+            });
+
+            
+            var a =  this.listeners('/pub/'+arg.data.chan).map((listener)=>{
+            	return listener(null,1);
+            });
+             
+            //console.log('\n',this.listeners('/pub/'+arg.data.chan),'\n', 'and the ids', a ,'\n and the id', arg.id);
+            //
+            console.log('before...',a);
+            
+            if (listener[0]) {
+            	this.removeListener('/pub/'+arg.data.chan, listener[0]);
+            }
+            a =  this.listeners('/pub/'+arg.data.chan).map((listener)=>{
+            	return listener(null,1);
+            });
+            console.log('and after...',a);
+
+        });
+
+        ipc.on('/list-connections',(evnt, arg)=>{
+        	evnt.returnValue = this.connectionList;
+        });
+
         ipc.on('/sub', (evnt, arg)=>{
-        	console.log('subscribe',arg);
+        	console.log('subscribed from', evnt.sender.getId(), arg.id);
         	evnt.returnValue = true;
+        	let id = arg.id,
+        		senderId = evnt.sender.getId();
         	
-        	/*
-        	@todo this will send to a window multiple times if there are 
-        	multiple 'connections' duplicating on the remote end. this needs to
-        	be one per sender
-        	 */
-        	this.on('/pub/' + arg.data, function FUZZZZ(data){
-        		console.log('send it!!', data);
-        		evnt.sender.send(arg.data, data);
-        	});
+        	//subscribe locally 
+        	this.on('/pub/' + arg.data, (function() {
+        	    return function(data, reqId) {
+        	        if (reqId) {
+        	            return id;//[id, senderId];
+        	        } else {
+        	            evnt.sender.send(id + '/' + arg.data, data);
+        	        }
+        	    }
+        	}()));
+
         });
 
         ipc.on('/pub', (evnt, arg)=>{
-        	console.log('publish', arg);
         	evnt.returnValue = true;
 
-        	console.log('emitting', '/pub/'+arg.data.chan, arg.data.data);
+        	//emit it locally 
         	this.emit('/pub/'+arg.data.chan, arg.data.data);
         });
     }

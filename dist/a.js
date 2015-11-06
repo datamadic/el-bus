@@ -12,9 +12,11 @@ var Connection = require('./bus.js').Connection;
 
 var connection = new Connection(ipc);
 
-connection.on('something', function (arg) {
+var somethingHandler = function somethingHandler(arg) {
   console.log('something BACK TO MEEE', arg);
-});
+};
+
+connection.on('something', somethingHandler);
 
 var connection2 = new Connection(ipc);
 
@@ -22,7 +24,17 @@ connection2.on('something', function (arg) {
   console.log('anodda wan', arg);
 });
 
+console.log('connections please...', connection.listConnections());
+
 connection.emit('something', 234234);
+
+setTimeout(function () {
+  connection.removeListener('something', somethingHandler);
+}, 300);
+
+setTimeout(function () {
+  connection.emit('something', 234234);
+}, 1000);
 
 // var Bus = require('./bus.js').Bus,
 // 	bus = new Bus(),

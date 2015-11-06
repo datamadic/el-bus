@@ -21,18 +21,26 @@ var Connection = (function (_EventEmitter) {
   _inherits(Connection, _EventEmitter);
 
   function Connection(ipc) {
+    var name = arguments.length <= 1 || arguments[1] === undefined ? '' : arguments[1];
+
     _classCallCheck(this, Connection);
 
     var _this = _possibleConstructorReturn(this, Object.getPrototypeOf(Connection).call(this));
 
     _this.ipc = ipc;
     _this.id = uuid.v4();
+    _this.name = name;
 
     ipc.sendSync('/register', {
       id: _this.id,
-      data: null
+      data: {
+        meta: {
+          name: _this.name,
+          id: _this.id,
+          version: process.versions.electron
+        }
+      }
     });
-
     return _this;
   }
 
@@ -44,9 +52,7 @@ var Connection = (function (_EventEmitter) {
         data: chan
       });
 
-      ipc.on(chan, function (evnt, arg) {
-        cb(evnt, arg);
-      });
+      ipc.on(this.id + '/' + chan, cb);
     }
   }, {
     key: 'emit',
@@ -59,26 +65,27 @@ var Connection = (function (_EventEmitter) {
         }
       });
     }
+  }, {
+    key: 'removeListener',
+    value: function removeListener(chan, callback) {
+      ipc.sendSync('/unsub', {
+        id: this.id,
+        data: {
+          chan: chan
+        }
+      });
+
+      ipc.removeListener(chan, callback);
+    }
+  }, {
+    key: 'listConnections',
+    value: function listConnections() {
+      return ipc.sendSync('/list-connections');
+    }
   }]);
 
   return Connection;
 })(EventEmitter);
-
-// class MessagePayload {
-// 	constructor(){
-// 		this.
-// 	}
-// }
-
-// class Bus {
-// 	Connection (ipc){
-// 		return
-// 	}
-
-// 	this.types =  {
-// 		MULTI: 'multi'
-// 	}
-// }
 
 var Server = (function (_EventEmitter2) {
   _inherits(Server, _EventEmitter2);
@@ -86,33 +93,70 @@ var Server = (function (_EventEmitter2) {
   function Server(ipc) {
     _classCallCheck(this, Server);
 
+    //a store of meta info (used for resolving names?)
+
     var _this2 = _possibleConstructorReturn(this, Object.getPrototypeOf(Server).call(this));
+
+    _this2.connectionList = [];
 
     ipc.on('/register', function (evnt, arg) {
       console.log('register', arg);
+      _this2.connectionList.push(arg.data.meta);
+      console.log(_this2.connectionList);
       evnt.returnValue = true;
+    });
+
+    ipc.on('/unsub', function (evnt, arg) {
+      //console.log('unregister', arg, evnt.sender.getId(), '/pub/'+arg.data.chan);
+      evnt.returnValue = true;
+
+      var listener = _this2.listeners('/pub/' + arg.data.chan).filter(function (listener) {
+        return listener(null, 1) === arg.id;
+      });
+
+      var a = _this2.listeners('/pub/' + arg.data.chan).map(function (listener) {
+        return listener(null, 1);
+      });
+
+      //console.log('\n',this.listeners('/pub/'+arg.data.chan),'\n', 'and the ids', a ,'\n and the id', arg.id);
+      //
+      console.log('before...', a);
+
+      if (listener[0]) {
+        _this2.removeListener('/pub/' + arg.data.chan, listener[0]);
+      }
+      a = _this2.listeners('/pub/' + arg.data.chan).map(function (listener) {
+        return listener(null, 1);
+      });
+      console.log('and after...', a);
+    });
+
+    ipc.on('/list-connections', function (evnt, arg) {
+      evnt.returnValue = _this2.connectionList;
     });
 
     ipc.on('/sub', function (evnt, arg) {
-      console.log('subscribe', arg);
+      console.log('subscribed from', evnt.sender.getId(), arg.id);
       evnt.returnValue = true;
+      var id = arg.id,
+          senderId = evnt.sender.getId();
 
-      /*
-      @todo this will send to a window multiple times if there are 
-      multiple 'connections' duplicating on the remote end. this needs to
-      be one per sender
-       */
-      _this2.on('/pub/' + arg.data, function FUZZZZ(data) {
-        console.log('send it!!', data);
-        evnt.sender.send(arg.data, data);
-      });
+      //subscribe locally
+      _this2.on('/pub/' + arg.data, (function () {
+        return function (data, reqId) {
+          if (reqId) {
+            return id; //[id, senderId];
+          } else {
+              evnt.sender.send(id + '/' + arg.data, data);
+            }
+        };
+      })());
     });
 
     ipc.on('/pub', function (evnt, arg) {
-      console.log('publish', arg);
       evnt.returnValue = true;
 
-      console.log('emitting', '/pub/' + arg.data.chan, arg.data.data);
+      //emit it locally
       _this2.emit('/pub/' + arg.data.chan, arg.data.data);
     });
     return _this2;

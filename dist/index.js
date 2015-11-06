@@ -47,6 +47,7 @@ app.on('ready', function () {
 
     // // Open the DevTools.
     win_a.openDevTools();
+    win_b.openDevTools();
 
     // anotherWindow = new BrowserWindow({width: 800, height: 600});
     // anotherWindow.loadUrl('file://' + __dirname + '/i2.html');
