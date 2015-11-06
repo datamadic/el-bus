@@ -78,30 +78,15 @@ class Server extends EventEmitter {
         });
 
         ipc.on('/unsub', (evnt, arg) => {
-            //console.log('unregister', arg, evnt.sender.getId(), '/pub/'+arg.data.chan);
             evnt.returnValue = true;
 
             let listener = this.listeners('/pub/'+arg.data.chan).filter(listener =>{
             	return listener(null,1) === arg.id
             });
-
-            
-            var a =  this.listeners('/pub/'+arg.data.chan).map((listener)=>{
-            	return listener(null,1);
-            });
-             
-            //console.log('\n',this.listeners('/pub/'+arg.data.chan),'\n', 'and the ids', a ,'\n and the id', arg.id);
-            //
-            console.log('before...',a);
             
             if (listener[0]) {
             	this.removeListener('/pub/'+arg.data.chan, listener[0]);
             }
-            a =  this.listeners('/pub/'+arg.data.chan).map((listener)=>{
-            	return listener(null,1);
-            });
-            console.log('and after...',a);
-
         });
 
         ipc.on('/list-connections',(evnt, arg)=>{
@@ -109,7 +94,6 @@ class Server extends EventEmitter {
         });
 
         ipc.on('/sub', (evnt, arg)=>{
-        	console.log('subscribed from', evnt.sender.getId(), arg.id);
         	evnt.returnValue = true;
         	let id = arg.id,
         		senderId = evnt.sender.getId();
@@ -118,7 +102,7 @@ class Server extends EventEmitter {
         	this.on('/pub/' + arg.data, (function() {
         	    return function(data, reqId) {
         	        if (reqId) {
-        	            return id;//[id, senderId];
+        	            return id;
         	        } else {
         	            evnt.sender.send(id + '/' + arg.data, data);
         	        }

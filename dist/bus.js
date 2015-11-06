@@ -107,28 +107,15 @@ var Server = (function (_EventEmitter2) {
     });
 
     ipc.on('/unsub', function (evnt, arg) {
-      //console.log('unregister', arg, evnt.sender.getId(), '/pub/'+arg.data.chan);
       evnt.returnValue = true;
 
       var listener = _this2.listeners('/pub/' + arg.data.chan).filter(function (listener) {
         return listener(null, 1) === arg.id;
       });
 
-      var a = _this2.listeners('/pub/' + arg.data.chan).map(function (listener) {
-        return listener(null, 1);
-      });
-
-      //console.log('\n',this.listeners('/pub/'+arg.data.chan),'\n', 'and the ids', a ,'\n and the id', arg.id);
-      //
-      console.log('before...', a);
-
       if (listener[0]) {
         _this2.removeListener('/pub/' + arg.data.chan, listener[0]);
       }
-      a = _this2.listeners('/pub/' + arg.data.chan).map(function (listener) {
-        return listener(null, 1);
-      });
-      console.log('and after...', a);
     });
 
     ipc.on('/list-connections', function (evnt, arg) {
@@ -136,7 +123,6 @@ var Server = (function (_EventEmitter2) {
     });
 
     ipc.on('/sub', function (evnt, arg) {
-      console.log('subscribed from', evnt.sender.getId(), arg.id);
       evnt.returnValue = true;
       var id = arg.id,
           senderId = evnt.sender.getId();
@@ -145,10 +131,10 @@ var Server = (function (_EventEmitter2) {
       _this2.on('/pub/' + arg.data, (function () {
         return function (data, reqId) {
           if (reqId) {
-            return id; //[id, senderId];
+            return id;
           } else {
-              evnt.sender.send(id + '/' + arg.data, data);
-            }
+            evnt.sender.send(id + '/' + arg.data, data);
+          }
         };
       })());
     });
