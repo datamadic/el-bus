@@ -27,17 +27,29 @@ var pcolNS = {
         CONNECT: '/connect',
         REGISTER: '/register',
         RESOLVE: '/resolve',
-        LIST_CONNECTIONS: '/list-connections',
-
-        pub: (chan) => {
-        	return `${pcolNS.PUB}/${chan}`;
-        },
-        sub: () => {},
-        send: () => {},
-        connect: () => {}
-
+        LIST_CONNECTIONS: '/list-connections'
     } //end pcolNS
 
+
+// rough route builder 
+var pcolBuild = {
+    pub: (chan) => {
+        return `${pcolNS.PUB}/${chan}`;
+    },
+    sub: () => {},
+    chanAddress: (id, chan) => {
+    	return id + '/' + chan;
+    },
+    connect: (id, chan) => {
+    	return `${pcolNS.RESOLVE}/${id}/${chan}/connect`;
+    },
+    bind: (id, chan) => {
+    	return `${pcolNS.RESOLVE}/${id}/${chan}/bind`;
+    },
+    resToken: (id, chan)=> {
+    	return `${pcolNS.RESOLVE}/${id}/${chan}`
+    }
+}
 
 
 
@@ -66,12 +78,14 @@ class Connection extends EventEmitter {
 	} 
 
 	on(chan, cb) {
+		let chanAddress = pcolBuild.chanAddress(this.id, chan);
+
 		ipc.sendSync(pcolNS.SUB, {
 			id: this.id,
 			data: chan
 		});
 
-		ipc.on(this.id + '/' + chan, cb);
+		ipc.on(chanAddress, cb);
 	}
 
 	emit(chan, ...data) {
@@ -90,9 +104,10 @@ class Connection extends EventEmitter {
 	bind(id, chan) {
 
 	    return new Promise((resolve, reject) => {
+	    	let resToken = pcolBuild.resToken(id, chan);
 
-	        // has to go before the request no to miss the msg back
-	        ipc.once(`/resolve/${id}/${chan}`, token => {
+	        // has to go before the request not to miss the msg back
+	        ipc.once(resToken, token => {
 
 	            // TODO perhaps this needs to be an obj that has both a send 
 	            // and a close?? 
@@ -121,8 +136,7 @@ class Connection extends EventEmitter {
 
 	// "receiver" side 
 	connect(bindToId, chan, cb) {
-		let chanString = `${this.id}/${chan}`,
-			token = uuid.v4();
+		let token = uuid.v4();
 
 		//register locally, listen before you ask!! 
 		ipc.on(token, cb);
@@ -136,17 +150,15 @@ class Connection extends EventEmitter {
 				token
 			}
 		});
-
 		
 		// return the close function 
+		// TODO need to close the remote 
 		return ()=>{
-			//need to close the remote 
 			ipc.removeListener(token, cb);
 		}
 	} 
 
 	removeListener(chan, callback) {
-		console.log('remove it ', chan,callback.toString());
 		ipc.removeListener(chan, callback);
 
 		ipc.sendSync(pcolNS.UNSUB, {
@@ -157,6 +169,7 @@ class Connection extends EventEmitter {
 		});
 	}
 
+	// the return value is the list (set sync from browser process)
 	listConnections(){
 		return ipc.sendSync(pcolNS.LIST_CONNECTIONS);
 	}
@@ -185,21 +198,20 @@ class Server extends EventEmitter {
         ipc.on(pcolNS.BIND, (evnt, arg) => {
 
         	// this is the ID of the binding app 
-        	// TODO need both ids here in the hash
-        	let resConnect = `/resolve/${arg.data.id}/${arg.data.chan}/connect`,
-        		resBind = `/resolve/${arg.data.id}/${arg.data.chan}/bind`,
-        		token;
+        	// TODO might need both ids here in the hash
+        	let id = arg.data.id,
+        		chan = arg.data.chan,
+        		resConnect = pcolBuild.connect(id, chan),
+        		resBind = pcolBuild.bind(id, chan), 
+        		resToken = pcolBuild.resToken(id, chan);
 
+        	// order is important here, need to be listening first... 
         	this.once(resBind, resolvedToken =>{
-        		token = resolvedToken;
 
-        		//send the token to the renderer 
-        		evnt.sender.send(`/resolve/${arg.data.id}/${arg.data.chan}` ,token);
-        		this.emit(resConnect, null); // clear any pending 
-
+        		//send the token to the renderer process then clear pending
+        		evnt.sender.send(resToken, resolvedToken);
+        		this.emit(resConnect, null);
         	});
-
-        	//order is important here, need to be listening first... 
         	this.emit(resConnect, null);
 
             evnt.returnValue = true;
@@ -207,9 +219,7 @@ class Server extends EventEmitter {
 
         ipc.on(pcolNS.SEND, (evnt, arg)=>{
         	evnt.returnValue = true;
-
         	this.emit(arg.data.token, arg);
-
         });
 
         // subscribe to a particular conn/topic combination 
@@ -217,24 +227,21 @@ class Server extends EventEmitter {
         	let bindToId = arg.data.bindToId,
         		chan = arg.data.chan,
 				token = arg.data.token,
-				id = arg.id,
-				// TODO need both ids here in the hash
-        		resBind = `/resolve/${bindToId}/${chan}/bind`,
-        		resConnect = `/resolve/${bindToId}/${chan}/connect`,
+				id = arg.id;
+
+			// TODO might need both ids here in the hash
+        	let resBind = pcolBuild.bind(bindToId, chan),
+        		resConnect = pcolBuild.connect(bindToId, chan),
         		callback = (data)=>{
         			evnt.sender.send(token, data);
         		};
         	
         	// TODO this should be packed with its id and unsubscribe 
-        	// function 
         	this.on(token, callback);
-
         	this.once(resConnect, resolvedToken =>{
         		this.emit(resBind,token);
         	});
         	this.emit(resBind,token);
-        	
-            //evnt.returnValue = true; //this one is async 
         });
 
 
@@ -242,21 +249,17 @@ class Server extends EventEmitter {
         general pub-sub 
         **********************************************************************/
         ipc.on(pcolNS.UNSUB, (evnt, arg) => {
+        	let eventName = pcolBuild.pub(arg.data.chan);
+
             evnt.returnValue = true;
 
-            let listeners = this.listeners(pcolNS.pub(arg.data.chan)).filter(listener => {
+            let listeners = this.listeners(eventName).filter(listener => {
             	return listener.id === arg.id;
             });
             
-            console.log('remove me', listeners, this.listeners(pcolNS.pub(arg.data.chan)));
-            // Should this handle an array???
             listeners.forEach(listener=>{
             	listener.unsubscribe();
             });
-            
-            //if (listener[0]) {
-            // 	this.removeListener(pcolNS.pub(arg.data.chan), listener[0]);
-            // }
         });
 
         
@@ -264,42 +267,28 @@ class Server extends EventEmitter {
         	evnt.returnValue = true;
         	let id = arg.id,
         		senderId = evnt.sender.getId(),
+        		address = pcolBuild.chanAddress(id, arg.data),
+        		pubEvent = pcolBuild.pub(arg.data),
         		callback = (data) => {
-        			evnt.sender.send(id + '/' + arg.data, data);
+        			evnt.sender.send(address, data);
         		};
 
         	callback.id = id;
         	callback.unsubscribe = () => {
-        		this.removeListener(pcolNS.pub(arg.data), callback)
+        		this.removeListener(pubEvent, callback)
         	};
 
         	//subscribe locally 
-        	this.on(pcolNS.pub(arg.data), callback);
+        	this.on(pubEvent, callback);
         });
 
-        /*
-        (function() {
-
-        		// TODO: this can be packed with its id and unsubscribe 
-        		// function 
-        	    return function(data, reqId) {
-
-        	        if (reqId) {
-        	            return id;
-        	        } else {
-        	            evnt.sender.send(id + '/' + arg.data, data);
-        	        }
-        	    }
-        	}())
-         */
-
-
         ipc.on(pcolNS.PUB, (evnt, arg)=>{
+        	let eventName = pcolBuild.pub(arg.data.chan);
+
         	evnt.returnValue = true;
 
-        	console.log('send it');
         	//emit it locally 
-        	this.emit(pcolNS.pub(arg.data.chan), arg);
+        	this.emit(eventName, arg);
         });
 
 
@@ -307,6 +296,7 @@ class Server extends EventEmitter {
         util functions
         **********************************************************************/
         ipc.on(pcolNS.REGISTER, (evnt, arg) => {
+        	// TODO this never gets cleaned.... do clean it
             this.connectionList.push(arg.data.meta);
             evnt.returnValue = true;
         });

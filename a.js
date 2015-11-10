@@ -25,18 +25,18 @@ var somethingHandler = (arg)=>{
  */
 //connection.on('something', somethingHandler);
 
-connection.emit('someChan', 234234, 'NEVER 1');
+// connection.emit('someChan', 234234, 'NEVER 1');
 
-connection.on('someChan', somethingHandler);
+// connection.on('someChan', somethingHandler);
 
-// connection.on('someChan', arg=>{
-// 	console.log('GOTCHA!!', arg);
-// });
+connection.on('someChan', arg=>{
+	console.log('GOTCHA!!', arg);
+});
 
 
 connection.emit('someChan', 234234, 'and this as well');
-connection.removeListener('someChan', somethingHandler);
-connection.emit('someChan', 'NEVER');
+// connection.removeListener('someChan', somethingHandler);
+// connection.emit('someChan', 'NEVER');
 
 
 
@@ -44,19 +44,19 @@ connection.emit('someChan', 'NEVER');
 /*
 	conn to conn
  */
-// var remId = connection.listConnections()[0].id;
-// console.log(connection.listConnections());
+var remId = connection.listConnections()[0].id;
+console.log(connection.listConnections());
 
-// connection.bind(remId,'someChan').then(sendFn =>{
-// 	sendFn('yahoooo');
-// 	sendFn('2');
-// 	sendFn('3');
-// 	sendFn('4');
-// });
+connection.bind(remId,'someChan').then(sendFn =>{
+	sendFn('yahoooo');
+	sendFn('2');
+	sendFn('3');
+	sendFn('4');
+});
 
-// var closeConn = connection.connect(remId, 'someChan', msg=>{
-// 	console.log('this was the data', msg.data.data[0]);
-// });
+var closeConn = connection.connect(remId, 'someChan', msg=>{
+	console.log('this was the data', msg.data.data[0]);
+});
 
 
 
