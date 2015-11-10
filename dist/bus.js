@@ -11,6 +11,12 @@ function _inherits(subClass, superClass) { if (typeof superClass !== "function" 
 /******************************************************************************
  * 
  * bus.js
+ *
+ * Some guarantees everything inbound will have the shape: 
+ * {
+ * 	id,	// a string uuid that is unique to that connection 
+ * 	data, // any type
+ * }
  * 
  *****************************************************************************/
 
@@ -18,25 +24,11 @@ var uuid = require('node-uuid'),
     EventEmitter = require('events'),
     _ = require('underscore');
 
+// rough NS so far...
 var pcolNS = {
-  /*
-  	
-  	
-  	'/sub' --> on '/pub/' + arg.data
-  	'/pub' --> emit '/pub/'+arg.data.chan
-   	*connection to connection*
-  	'/bind'
-  	'/send' --> `/send/${arg.id}/${chan}`
-  	'/connect' --> `/send/${bindToId}/${chan}`
-    	`${this.id}/${chan}` //client side chan string 
-   	'/unsub' --> '/pub/'+arg.data.chan
-   	'/register'
-  	'/list-connections'
-    */
   SUB: '/sub',
   UNSUB: '/unsub',
   PUB: '/pub',
-
   BIND: '/bind',
   SEND: '/send',
   CONNECT: '/connect',
@@ -46,11 +38,8 @@ var pcolNS = {
   pub: function pub(chan) {
     return pcolNS.PUB + '/' + chan;
   },
-
   sub: function sub() {},
-
   send: function send() {},
-
   connect: function connect() {}
 
 }; //end pcolNS
@@ -101,8 +90,6 @@ var Connection = (function (_EventEmitter) {
         data[_key - 1] = arguments[_key];
       }
 
-      // let pairAction = pair? '/direct': '',
-      // 	action = '/pub' + pairAction;
       var action = pcolNS.PUB;
 
       ipc.sendSync(action, {
@@ -123,12 +110,11 @@ var Connection = (function (_EventEmitter) {
 
       return new Promise(function (resolve, reject) {
 
-        // has to go before the request
-        console.log("I WANT", '/resolve/' + id + '/' + chan);
+        // has to go before the request no to miss the msg back
         ipc.once('/resolve/' + id + '/' + chan, function (token) {
-          console.log('huzza', token);
 
-          // return the sending function
+          // TODO perhaps this needs to be an obj that has both a send
+          // and a close??
           resolve(function () {
             for (var _len2 = arguments.length, data = Array(_len2), _key2 = 0; _key2 < _len2; _key2++) {
               data[_key2] = arguments[_key2];
@@ -138,6 +124,7 @@ var Connection = (function (_EventEmitter) {
               id: _this2.id,
               data: {
                 chan: chan,
+                token: token,
                 data: data
               }
             });
@@ -160,22 +147,31 @@ var Connection = (function (_EventEmitter) {
   }, {
     key: 'connect',
     value: function connect(bindToId, chan, cb) {
-      var chanString = this.id + '/' + chan;
 
-      ipc.sendSync(pcolNS.CONNECT, {
+      console.log('closing1');
+
+      var chanString = this.id + '/' + chan,
+          token = uuid.v4();
+
+      //register locally, listen before you ask!!
+      ipc.on(token, cb);
+
+      console.log('closing2', token);
+
+      // this token becomes the "address" of this pair
+      ipc.send(pcolNS.CONNECT, {
         id: this.id,
         data: {
           bindToId: bindToId,
-          chan: chan
+          chan: chan,
+          token: token
         }
       });
 
-      //register locally
-      ipc.on(chanString, cb);
-
       // return the close function
+      console.log('closing3');
       return function () {
-        ipc.removeListener(chanString, cb);
+        ipc.removeListener(token, cb);
       };
     }
   }, {
@@ -214,11 +210,14 @@ var Server = (function (_EventEmitter2) {
 
     /**********************************************************************
     connection to connection 
-     *********************************************************************/
+     TODO: add lifecycle (close and...) to the bind / connect case. 
+    **********************************************************************/
 
     // publish to a particular conn/topic combination
     ipc.on(pcolNS.BIND, function (evnt, arg) {
 
+      // this is the ID of the binding app
+      // WHAT IF THERE ARE 2 BINDS TO DIFF CONNS?? need both ids here
       var resConnect = '/resolve/' + arg.data.id + '/' + arg.data.chan + '/connect',
           resBind = '/resolve/' + arg.data.id + '/' + arg.data.chan + '/bind',
           token = undefined;
@@ -226,7 +225,7 @@ var Server = (function (_EventEmitter2) {
       _this3.once(resBind, function (resolvedToken) {
         token = resolvedToken;
 
-        console.log('RES THIS!', '/resolve/' + arg.data.id + '/' + arg.data.chan);
+        //send the token to the renderer
         evnt.sender.send('/resolve/' + arg.data.id + '/' + arg.data.chan, token);
         _this3.emit(resConnect, null); // clear any pending
       });
@@ -234,37 +233,36 @@ var Server = (function (_EventEmitter2) {
       //order is important here, need to be listening first...
       _this3.emit(resConnect, null);
 
-      // check if anyone is listening, return t/f
       evnt.returnValue = true;
     });
 
     ipc.on(pcolNS.SEND, function (evnt, arg) {
       evnt.returnValue = true;
-      var chan = arg.data.chan;
 
-      _this3.emit('/send/' + arg.id + '/' + chan, arg.data);
+      _this3.emit(arg.data.token, arg);
     });
 
     // subscribe to a particular conn/topic combination
     ipc.on(pcolNS.CONNECT, function (evnt, arg) {
-      //add the lister combo to the list
       var bindToId = arg.data.bindToId,
-          chan = arg.data.chan;
+          chan = arg.data.chan,
+          token = arg.data.token,
+          // uuid.v4(),
+      id = arg.id,
+          resBind = '/resolve/' + bindToId + '/' + chan + '/bind',
+          resConnect = '/resolve/' + bindToId + '/' + chan + '/connect';
 
-      _this3.on('/send/' + bindToId + '/' + chan, (function () {
+      _this3.on(token, (function () {
 
         return function (data, reqId) {
+          console.log('send it out', data);
           if (reqId) {
             return id;
           } else {
-            evnt.sender.send(arg.id + '/' + arg.data.chan, data);
+            evnt.sender.send(token, data);
           }
         };
       })());
-
-      var token = uuid.v4(),
-          resBind = '/resolve/' + bindToId + '/' + chan + '/bind',
-          resConnect = '/resolve/' + bindToId + '/' + chan + '/connect';
 
       _this3.once(resConnect, function (resolvedToken) {
         _this3.emit(resBind, token);
@@ -276,7 +274,7 @@ var Server = (function (_EventEmitter2) {
 
     /**********************************************************************
     general pub-sub 
-     *********************************************************************/
+    **********************************************************************/
     ipc.on(pcolNS.UNSUB, function (evnt, arg) {
       evnt.returnValue = true;
 
@@ -315,15 +313,13 @@ var Server = (function (_EventEmitter2) {
     ipc.on(pcolNS.PUB, function (evnt, arg) {
       evnt.returnValue = true;
 
-      console.log(arg);
-
       //emit it locally
       _this3.emit(pcolNS.pub(arg.data.chan), arg);
     });
 
     /**********************************************************************
     util functions
-     *********************************************************************/
+    **********************************************************************/
     ipc.on(pcolNS.REGISTER, function (evnt, arg) {
       _this3.connectionList.push(arg.data.meta);
       evnt.returnValue = true;

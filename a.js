@@ -47,6 +47,9 @@ var remId = connection.listConnections()[0].id;
 connection.bind(remId,'someChan').then(sendFn =>{
 	console.log('AND THENNNNN');
 	sendFn('yahoooo');
+	sendFn('2');
+	sendFn('3');
+	sendFn('4');
 });
 
 //boundSend('hey buddy this is what im sending');
@@ -54,14 +57,14 @@ connection.bind(remId,'someChan').then(sendFn =>{
 
 var i = 0;
 var closeConn = connection.connect(remId, 'someChan', data=>{
-	console.log('this was the data', data.data);
+	console.log('this was the data', data);
 	if (i === 1) {
 		closeConn();
 	}
 	i++;
 });
 
-console.log('list of connections ', connection.listConnections());
+//console.log('list of connections ', connection.listConnections());
 
 
 //boundSend('2');
@@ -70,7 +73,7 @@ console.log('list of connections ', connection.listConnections());
 
 
 
-// connection.emit('something', 234234, 'and this as well');
+connection.emit('someChan', 234234, 'and this as well');
 
 // setTimeout(()=>{
 // 	connection.removeListener('something', somethingHandler);

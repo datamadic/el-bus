@@ -1,6 +1,12 @@
 /******************************************************************************
  * 
  * bus.js
+ *
+ * Some guarantees everything inbound will have the shape: 
+ * {
+ * 	id,	// a string uuid that is unique to that connection 
+ * 	data, // any type
+ * }
  * 
  *****************************************************************************/
 
@@ -8,53 +14,24 @@ var uuid = require('node-uuid'),
 	EventEmitter = require('events'),
 	_ = require('underscore');
 
+
+// rough NS so far... 
 var pcolNS = {
-        /*
-        	
-        	
-        	'/sub' --> on '/pub/' + arg.data
-        	'/pub' --> emit '/pub/'+arg.data.chan
-
-        	*connection to connection*
-        	'/bind'
-        	'/send' --> `/send/${arg.id}/${chan}`
-        	'/connect' --> `/send/${bindToId}/${chan}`
-
-
-        	`${this.id}/${chan}` //client side chan string 
-
-        	'/unsub' --> '/pub/'+arg.data.chan
-
-        	'/register'
-        	'/list-connections'
-
-         */
         SUB: '/sub',
         UNSUB: '/unsub',
         PUB: '/pub',
-
         BIND: '/bind',
         SEND: '/send',
         CONNECT: '/connect',
         REGISTER: '/register',
         LIST_CONNECTIONS: '/list-connections',
 
-
         pub: (chan) => {
         	return `${pcolNS.PUB}/${chan}`;
         },
-
-        sub: () => {
-
-        },
-
-        send: () => {
-
-        },
-
-        connect: () => {
-
-        }
+        sub: () => {},
+        send: () => {},
+        connect: () => {}
 
     } //end pcolNS
 
@@ -90,8 +67,6 @@ class Connection extends EventEmitter {
 	}
 
 	emit(chan, ...data) {
-		// let pairAction = pair? '/direct': '',
-		// 	action = '/pub' + pairAction;
 		let action = pcolNS.PUB;
 
 		ipc.sendSync(action, {
@@ -108,17 +83,17 @@ class Connection extends EventEmitter {
 
 	    return new Promise((resolve, reject) => {
 
-	        // has to go before the request 
-	        console.log("I WANT", `/resolve/${id}/${chan}`);
+	        // has to go before the request no to miss the msg back
 	        ipc.once(`/resolve/${id}/${chan}`, token => {
-	            console.log('huzza', token);
 
-	            // return the sending function 
+	            // TODO perhaps this needs to be an obj that has both a send 
+	            // and a close?? 
 	            resolve((...data) => {
 	                ipc.sendSync(pcolNS.SEND, {
 	                    id: this.id,
 	                    data: {
 	                        chan,
+	                        token,
 	                        data
 	                    }
 	                });
@@ -138,22 +113,35 @@ class Connection extends EventEmitter {
 
 	// "client side"
 	connect(bindToId, chan, cb) {
-		let chanString = `${this.id}/${chan}`;
 
-		ipc.sendSync(pcolNS.CONNECT, {
+		console.log('closing1');
+
+		let chanString = `${this.id}/${chan}`,
+			token = uuid.v4();
+
+
+
+		//register locally, listen before you ask!! 
+		ipc.on(token, cb);
+
+		console.log('closing2',token);
+
+		// this token becomes the "address" of this pair
+		ipc.send(pcolNS.CONNECT, {
 			id: this.id,
 			data: {
 				bindToId,
-				chan
+				chan,
+				token
 			}
 		});
 
-		//register locally
-		ipc.on(chanString, cb);
+		
 
 		// return the close function 
+		console.log('closing3');
 		return ()=>{
-			ipc.removeListener(chanString, cb);
+			ipc.removeListener(token, cb);
 		}
 	} 
 
@@ -186,11 +174,15 @@ class Server extends EventEmitter {
         
         /**********************************************************************
         connection to connection 
-         *********************************************************************/
+
+        TODO: add lifecycle (close and...) to the bind / connect case. 
+        **********************************************************************/
 
         // publish to a particular conn/topic combination
         ipc.on(pcolNS.BIND, (evnt, arg) => {
 
+        	// this is the ID of the binding app 
+        	// WHAT IF THERE ARE 2 BINDS TO DIFF CONNS?? need both ids here 
         	let resConnect = `/resolve/${arg.data.id}/${arg.data.chan}/connect`,
         		resBind = `/resolve/${arg.data.id}/${arg.data.chan}/bind`,
         		token;
@@ -198,7 +190,7 @@ class Server extends EventEmitter {
         	this.once(resBind, resolvedToken =>{
         		token = resolvedToken;
 
-        		console.log('RES THIS!', `/resolve/${arg.data.id}/${arg.data.chan}`);
+        		//send the token to the renderer 
         		evnt.sender.send(`/resolve/${arg.data.id}/${arg.data.chan}` ,token);
         		this.emit(resConnect, null); // clear any pending 
 
@@ -207,38 +199,36 @@ class Server extends EventEmitter {
         	//order is important here, need to be listening first... 
         	this.emit(resConnect, null);
 
-        	// check if anyone is listening, return t/f
             evnt.returnValue = true;
         });
 
         ipc.on(pcolNS.SEND, (evnt, arg)=>{
         	evnt.returnValue = true;
-        	let chan = arg.data.chan;
-        	
-        	this.emit(`/send/${arg.id}/${chan}`, arg.data);
+
+        	this.emit(arg.data.token, arg);
 
         });
 
         // subscribe to a particular conn/topic combination 
         ipc.on(pcolNS.CONNECT, (evnt, arg) => {
-        	//add the lister combo to the list
         	let bindToId = arg.data.bindToId,
-        		chan = arg.data.chan;
+        		chan = arg.data.chan,
+				token = arg.data.token, // uuid.v4(),
+				id = arg.id,
+        		resBind = `/resolve/${bindToId}/${chan}/bind`,
+        		resConnect = `/resolve/${bindToId}/${chan}/connect`;
         	
-        	this.on(`/send/${bindToId}/${chan}`, (function() {
+        	this.on(token, (function() {
 
         	    return function(data, reqId) {
+        	    	console.log('send it out', data);
         	        if (reqId) {
         	            return id;
         	        } else {
-        	            evnt.sender.send(`${arg.id}/${arg.data.chan}`, data);
+        	            evnt.sender.send(token, data);
         	        }
         	    }
         	}()));
-        	
-        	let token = uuid.v4(),
-        		resBind = `/resolve/${bindToId}/${chan}/bind`,
-        		resConnect = `/resolve/${bindToId}/${chan}/connect`;
 
         	this.once(resConnect, resolvedToken =>{
         		this.emit(resBind,token);
@@ -251,7 +241,7 @@ class Server extends EventEmitter {
 
         /**********************************************************************
         general pub-sub 
-         *********************************************************************/
+        **********************************************************************/
         ipc.on(pcolNS.UNSUB, (evnt, arg) => {
             evnt.returnValue = true;
 
@@ -292,8 +282,6 @@ class Server extends EventEmitter {
         ipc.on(pcolNS.PUB, (evnt, arg)=>{
         	evnt.returnValue = true;
 
-        	console.log(arg);
-
         	//emit it locally 
         	this.emit(pcolNS.pub(arg.data.chan), arg);
         });
@@ -301,7 +289,7 @@ class Server extends EventEmitter {
 
         /**********************************************************************
         util functions
-         *********************************************************************/
+        **********************************************************************/
         ipc.on(pcolNS.REGISTER, (evnt, arg) => {
             this.connectionList.push(arg.data.meta);
             evnt.returnValue = true;
