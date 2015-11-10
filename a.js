@@ -8,6 +8,7 @@ var ipc = require('ipc');
 
 var Connection = require('./bus.js').Connection;
 
+//register some meta info
 var connection = new Connection(ipc, {
 	name: 'a-first-connection',
 	app: 'a-app'
@@ -18,18 +19,60 @@ var somethingHandler = (arg)=>{
 };
 
 
-// iab.subscrib(uuid, name, topic, good, bad,)
 
-connection.on('something', somethingHandler);
-connection.on('someChan', arg=>{
-	console.log('GOTCHA!!', arg);
-});
+/*
+	general case
+ */
+//connection.on('something', somethingHandler);
+
+connection.emit('someChan', 234234, 'NEVER 1');
+
+connection.on('someChan', somethingHandler);
+
+// connection.on('someChan', arg=>{
+// 	console.log('GOTCHA!!', arg);
+// });
 
 
-var connection2 = new Connection(ipc, {
-	name: 'a-second-connection',
-	app: 'a-app'
-});
+connection.emit('someChan', 234234, 'and this as well');
+connection.removeListener('someChan', somethingHandler);
+connection.emit('someChan', 'NEVER');
+
+
+
+
+/*
+	conn to conn
+ */
+// var remId = connection.listConnections()[0].id;
+// console.log(connection.listConnections());
+
+// connection.bind(remId,'someChan').then(sendFn =>{
+// 	sendFn('yahoooo');
+// 	sendFn('2');
+// 	sendFn('3');
+// 	sendFn('4');
+// });
+
+// var closeConn = connection.connect(remId, 'someChan', msg=>{
+// 	console.log('this was the data', msg.data.data[0]);
+// });
+
+
+
+
+
+
+
+
+
+
+
+
+// var connection2 = new Connection(ipc, {
+// 	name: 'a-second-connection',
+// 	app: 'a-app'
+// });
 
 // connection2.on('something', (arg)=>{
 // 	console.log('anodda wan', arg);
@@ -40,58 +83,23 @@ var connection2 = new Connection(ipc, {
 // 	connection.listConnections()[0].id, 'and there it was');
 
 
+//var i = 0;
+//	// if (i === 1) {
+	// 	closeConn();
+	// }
+	// i++;
 
-var remId = connection.listConnections()[0].id;
-
-
-connection.bind(remId,'someChan').then(sendFn =>{
-	console.log('AND THENNNNN');
-	sendFn('yahoooo');
-	sendFn('2');
-	sendFn('3');
-	sendFn('4');
-});
-
-//boundSend('hey buddy this is what im sending');
-
-
-var i = 0;
-var closeConn = connection.connect(remId, 'someChan', data=>{
-	console.log('this was the data', data);
-	if (i === 1) {
-		closeConn();
-	}
-	i++;
-});
 
 //console.log('list of connections ', connection.listConnections());
 
-
-//boundSend('2');
-// boundSend('3');
-
-
-
-
-connection.emit('someChan', 234234, 'and this as well');
+//connection.emit('someChan', 234234, 'and this as well');
 
 // setTimeout(()=>{
 // 	connection.removeListener('something', somethingHandler);
-// }, 3000);
+// }, 300);
 
 // setTimeout(()=>{
-// 	connection.emit('something', 234234);
+// 	connection.emit('something', 'never should you ever see this');
 // }, 1000);
 
-
-// var Bus = require('./bus.js').Bus,
-// 	bus = new Bus(),
-// 	connection = new bus.Connection();
-
-
-
-// connection.on('first', theMsg =>{
-// 	console.log(theMsg);
-// });
-
-// connection.emit('second', 'BAM');
+// iab.subscrib(uuid, name, topic, good, bad,)

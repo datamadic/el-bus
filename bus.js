@@ -2,7 +2,9 @@
  * 
  * bus.js
  *
- * Some guarantees everything inbound will have the shape: 
+ * Some guarantees 
+ * 
+ * everything inbound will have the shape: 
  * {
  * 	id,	// a string uuid that is unique to that connection 
  * 	data, // any type
@@ -24,6 +26,7 @@ var pcolNS = {
         SEND: '/send',
         CONNECT: '/connect',
         REGISTER: '/register',
+        RESOLVE: '/resolve',
         LIST_CONNECTIONS: '/list-connections',
 
         pub: (chan) => {
@@ -36,6 +39,11 @@ var pcolNS = {
     } //end pcolNS
 
 
+
+
+/**
+ * Lives in the render process - can be any number of these 
+ */
 class Connection extends EventEmitter {
 	constructor (ipc, connInfo = {
 		name: '',
@@ -78,7 +86,7 @@ class Connection extends EventEmitter {
 		});
 	}
 
-	// "server" side 
+	// "pusher"  side 
 	bind(id, chan) {
 
 	    return new Promise((resolve, reject) => {
@@ -111,20 +119,13 @@ class Connection extends EventEmitter {
 	    });
 	}
 
-	// "client side"
+	// "receiver" side 
 	connect(bindToId, chan, cb) {
-
-		console.log('closing1');
-
 		let chanString = `${this.id}/${chan}`,
 			token = uuid.v4();
 
-
-
 		//register locally, listen before you ask!! 
 		ipc.on(token, cb);
-
-		console.log('closing2',token);
 
 		// this token becomes the "address" of this pair
 		ipc.send(pcolNS.CONNECT, {
@@ -137,23 +138,23 @@ class Connection extends EventEmitter {
 		});
 
 		
-
 		// return the close function 
-		console.log('closing3');
 		return ()=>{
+			//need to close the remote 
 			ipc.removeListener(token, cb);
 		}
 	} 
 
 	removeListener(chan, callback) {
+		console.log('remove it ', chan,callback.toString());
+		ipc.removeListener(chan, callback);
+
 		ipc.sendSync(pcolNS.UNSUB, {
 			id: this.id,
 			data: {
 				chan
 			}
 		});
-
-		ipc.removeListener(chan, callback);
 	}
 
 	listConnections(){
@@ -163,7 +164,9 @@ class Connection extends EventEmitter {
 
 
 
-
+/**
+ * Lives in the browser process - singleton  
+ */
 class Server extends EventEmitter {
 
     constructor(ipc) {
@@ -182,7 +185,7 @@ class Server extends EventEmitter {
         ipc.on(pcolNS.BIND, (evnt, arg) => {
 
         	// this is the ID of the binding app 
-        	// WHAT IF THERE ARE 2 BINDS TO DIFF CONNS?? need both ids here 
+        	// TODO need both ids here in the hash
         	let resConnect = `/resolve/${arg.data.id}/${arg.data.chan}/connect`,
         		resBind = `/resolve/${arg.data.id}/${arg.data.chan}/bind`,
         		token;
@@ -213,29 +216,25 @@ class Server extends EventEmitter {
         ipc.on(pcolNS.CONNECT, (evnt, arg) => {
         	let bindToId = arg.data.bindToId,
         		chan = arg.data.chan,
-				token = arg.data.token, // uuid.v4(),
+				token = arg.data.token,
 				id = arg.id,
+				// TODO need both ids here in the hash
         		resBind = `/resolve/${bindToId}/${chan}/bind`,
-        		resConnect = `/resolve/${bindToId}/${chan}/connect`;
+        		resConnect = `/resolve/${bindToId}/${chan}/connect`,
+        		callback = (data)=>{
+        			evnt.sender.send(token, data);
+        		};
         	
-        	this.on(token, (function() {
-
-        	    return function(data, reqId) {
-        	    	console.log('send it out', data);
-        	        if (reqId) {
-        	            return id;
-        	        } else {
-        	            evnt.sender.send(token, data);
-        	        }
-        	    }
-        	}()));
+        	// TODO this should be packed with its id and unsubscribe 
+        	// function 
+        	this.on(token, callback);
 
         	this.once(resConnect, resolvedToken =>{
         		this.emit(resBind,token);
         	});
         	this.emit(resBind,token);
         	
-            evnt.returnValue = true;
+            //evnt.returnValue = true; //this one is async 
         });
 
 
@@ -245,28 +244,44 @@ class Server extends EventEmitter {
         ipc.on(pcolNS.UNSUB, (evnt, arg) => {
             evnt.returnValue = true;
 
-            let listener = this.listeners(pcolNS.pub(arg.data.chan)).filter(listener => {
-
-            	// Calling the listener with 2 arguments will return the 
-            	// stamped id, we can filter on this. 
-            	return listener(null,1) === arg.id
+            let listeners = this.listeners(pcolNS.pub(arg.data.chan)).filter(listener => {
+            	return listener.id === arg.id;
             });
             
+            console.log('remove me', listeners, this.listeners(pcolNS.pub(arg.data.chan)));
             // Should this handle an array???
-            if (listener[0]) {
-            	this.removeListener(pcolNS.pub(arg.data.chan), listener[0]);
-            }
+            listeners.forEach(listener=>{
+            	listener.unsubscribe();
+            });
+            
+            //if (listener[0]) {
+            // 	this.removeListener(pcolNS.pub(arg.data.chan), listener[0]);
+            // }
         });
 
         
         ipc.on(pcolNS.SUB, (evnt, arg)=>{
         	evnt.returnValue = true;
         	let id = arg.id,
-        		senderId = evnt.sender.getId();
-        	
-        	//subscribe locally 
-        	this.on(pcolNS.pub(arg.data), (function() {
+        		senderId = evnt.sender.getId(),
+        		callback = (data) => {
+        			evnt.sender.send(id + '/' + arg.data, data);
+        		};
 
+        	callback.id = id;
+        	callback.unsubscribe = () => {
+        		this.removeListener(pcolNS.pub(arg.data), callback)
+        	};
+
+        	//subscribe locally 
+        	this.on(pcolNS.pub(arg.data), callback);
+        });
+
+        /*
+        (function() {
+
+        		// TODO: this can be packed with its id and unsubscribe 
+        		// function 
         	    return function(data, reqId) {
 
         	        if (reqId) {
@@ -275,13 +290,14 @@ class Server extends EventEmitter {
         	            evnt.sender.send(id + '/' + arg.data, data);
         	        }
         	    }
-        	}()));
-        });
+        	}())
+         */
 
 
         ipc.on(pcolNS.PUB, (evnt, arg)=>{
         	evnt.returnValue = true;
 
+        	console.log('send it');
         	//emit it locally 
         	this.emit(pcolNS.pub(arg.data.chan), arg);
         });

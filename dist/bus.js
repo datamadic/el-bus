@@ -12,7 +12,9 @@ function _inherits(subClass, superClass) { if (typeof superClass !== "function" 
  * 
  * bus.js
  *
- * Some guarantees everything inbound will have the shape: 
+ * Some guarantees 
+ * 
+ * everything inbound will have the shape: 
  * {
  * 	id,	// a string uuid that is unique to that connection 
  * 	data, // any type
@@ -33,6 +35,7 @@ var pcolNS = {
   SEND: '/send',
   CONNECT: '/connect',
   REGISTER: '/register',
+  RESOLVE: '/resolve',
   LIST_CONNECTIONS: '/list-connections',
 
   pub: function pub(chan) {
@@ -43,6 +46,10 @@ var pcolNS = {
   connect: function connect() {}
 
 }; //end pcolNS
+
+/**
+ * Lives in the render process - can be any number of these 
+ */
 
 var Connection = (function (_EventEmitter) {
   _inherits(Connection, _EventEmitter);
@@ -101,7 +108,7 @@ var Connection = (function (_EventEmitter) {
       });
     }
 
-    // "server" side
+    // "pusher"  side
 
   }, {
     key: 'bind',
@@ -142,21 +149,16 @@ var Connection = (function (_EventEmitter) {
       });
     }
 
-    // "client side"
+    // "receiver" side
 
   }, {
     key: 'connect',
     value: function connect(bindToId, chan, cb) {
-
-      console.log('closing1');
-
       var chanString = this.id + '/' + chan,
           token = uuid.v4();
 
       //register locally, listen before you ask!!
       ipc.on(token, cb);
-
-      console.log('closing2', token);
 
       // this token becomes the "address" of this pair
       ipc.send(pcolNS.CONNECT, {
@@ -169,22 +171,23 @@ var Connection = (function (_EventEmitter) {
       });
 
       // return the close function
-      console.log('closing3');
       return function () {
+        //need to close the remote
         ipc.removeListener(token, cb);
       };
     }
   }, {
     key: 'removeListener',
     value: function removeListener(chan, callback) {
+      console.log('remove it ', chan, callback.toString());
+      ipc.removeListener(chan, callback);
+
       ipc.sendSync(pcolNS.UNSUB, {
         id: this.id,
         data: {
           chan: chan
         }
       });
-
-      ipc.removeListener(chan, callback);
     }
   }, {
     key: 'listConnections',
@@ -195,6 +198,10 @@ var Connection = (function (_EventEmitter) {
 
   return Connection;
 })(EventEmitter); // end Connection class
+
+/**
+ * Lives in the browser process - singleton  
+ */
 
 var Server = (function (_EventEmitter2) {
   _inherits(Server, _EventEmitter2);
@@ -217,7 +224,7 @@ var Server = (function (_EventEmitter2) {
     ipc.on(pcolNS.BIND, function (evnt, arg) {
 
       // this is the ID of the binding app
-      // WHAT IF THERE ARE 2 BINDS TO DIFF CONNS?? need both ids here
+      // TODO need both ids here in the hash
       var resConnect = '/resolve/' + arg.data.id + '/' + arg.data.chan + '/connect',
           resBind = '/resolve/' + arg.data.id + '/' + arg.data.chan + '/bind',
           token = undefined;
@@ -247,29 +254,25 @@ var Server = (function (_EventEmitter2) {
       var bindToId = arg.data.bindToId,
           chan = arg.data.chan,
           token = arg.data.token,
-          // uuid.v4(),
-      id = arg.id,
-          resBind = '/resolve/' + bindToId + '/' + chan + '/bind',
-          resConnect = '/resolve/' + bindToId + '/' + chan + '/connect';
+          id = arg.id,
 
-      _this3.on(token, (function () {
+      // TODO need both ids here in the hash
+      resBind = '/resolve/' + bindToId + '/' + chan + '/bind',
+          resConnect = '/resolve/' + bindToId + '/' + chan + '/connect',
+          callback = function callback(data) {
+        evnt.sender.send(token, data);
+      };
 
-        return function (data, reqId) {
-          console.log('send it out', data);
-          if (reqId) {
-            return id;
-          } else {
-            evnt.sender.send(token, data);
-          }
-        };
-      })());
+      // TODO this should be packed with its id and unsubscribe
+      // function
+      _this3.on(token, callback);
 
       _this3.once(resConnect, function (resolvedToken) {
         _this3.emit(resBind, token);
       });
       _this3.emit(resBind, token);
 
-      evnt.returnValue = true;
+      //evnt.returnValue = true; //this one is async
     });
 
     /**********************************************************************
@@ -278,41 +281,56 @@ var Server = (function (_EventEmitter2) {
     ipc.on(pcolNS.UNSUB, function (evnt, arg) {
       evnt.returnValue = true;
 
-      var listener = _this3.listeners(pcolNS.pub(arg.data.chan)).filter(function (listener) {
-
-        // Calling the listener with 2 arguments will return the
-        // stamped id, we can filter on this.
-        return listener(null, 1) === arg.id;
+      var listeners = _this3.listeners(pcolNS.pub(arg.data.chan)).filter(function (listener) {
+        return listener.id === arg.id;
       });
 
+      console.log('remove me', listeners, _this3.listeners(pcolNS.pub(arg.data.chan)));
       // Should this handle an array???
-      if (listener[0]) {
-        _this3.removeListener(pcolNS.pub(arg.data.chan), listener[0]);
-      }
+      listeners.forEach(function (listener) {
+        listener.unsubscribe();
+      });
+
+      //if (listener[0]) {
+      // 	this.removeListener(pcolNS.pub(arg.data.chan), listener[0]);
+      // }
     });
 
     ipc.on(pcolNS.SUB, function (evnt, arg) {
       evnt.returnValue = true;
       var id = arg.id,
-          senderId = evnt.sender.getId();
+          senderId = evnt.sender.getId(),
+          callback = function callback(data) {
+        evnt.sender.send(id + '/' + arg.data, data);
+      };
+
+      callback.id = id;
+      callback.unsubscribe = function () {
+        _this3.removeListener(pcolNS.pub(arg.data), callback);
+      };
 
       //subscribe locally
-      _this3.on(pcolNS.pub(arg.data), (function () {
-
-        return function (data, reqId) {
-
-          if (reqId) {
-            return id;
-          } else {
-            evnt.sender.send(id + '/' + arg.data, data);
-          }
-        };
-      })());
+      _this3.on(pcolNS.pub(arg.data), callback);
     });
+
+    /*
+    (function() {
+     		// TODO: this can be packed with its id and unsubscribe 
+    		// function 
+    	    return function(data, reqId) {
+     	        if (reqId) {
+    	            return id;
+    	        } else {
+    	            evnt.sender.send(id + '/' + arg.data, data);
+    	        }
+    	    }
+    	}())
+     */
 
     ipc.on(pcolNS.PUB, function (evnt, arg) {
       evnt.returnValue = true;
 
+      console.log('send it');
       //emit it locally
       _this3.emit(pcolNS.pub(arg.data.chan), arg);
     });
