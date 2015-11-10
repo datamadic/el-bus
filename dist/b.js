@@ -16,6 +16,6 @@ connection.on('something', function (arg) {
   console.log('something BACK TO MEEE', arg);
 });
 
-connection.emit('something', 234234);
+connection.emit('something', 'this is something else');
 
 console.log('connections please...', connection.listConnections());

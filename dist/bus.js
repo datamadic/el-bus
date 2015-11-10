@@ -15,13 +15,54 @@ function _inherits(subClass, superClass) { if (typeof superClass !== "function" 
  *****************************************************************************/
 
 var uuid = require('node-uuid'),
-    EventEmitter = require('events');
+    EventEmitter = require('events'),
+    _ = require('underscore');
+
+var pcolNS = {
+  /*
+  	
+  	
+  	'/sub' --> on '/pub/' + arg.data
+  	'/pub' --> emit '/pub/'+arg.data.chan
+   	*connection to connection*
+  	'/bind'
+  	'/send' --> `/send/${arg.id}/${chan}`
+  	'/connect' --> `/send/${bindToId}/${chan}`
+    	`${this.id}/${chan}` //client side chan string 
+   	'/unsub' --> '/pub/'+arg.data.chan
+   	'/register'
+  	'/list-connections'
+    */
+  SUB: '/sub',
+  UNSUB: '/unsub',
+  PUB: '/pub',
+
+  BIND: '/bind',
+  SEND: '/send',
+  CONNECT: '/connect',
+  REGISTER: '/register',
+  LIST_CONNECTIONS: '/list-connections',
+
+  pub: function pub(chan) {
+    return pcolNS.PUB + '/' + chan;
+  },
+
+  sub: function sub() {},
+
+  send: function send() {},
+
+  connect: function connect() {}
+
+}; //end pcolNS
 
 var Connection = (function (_EventEmitter) {
   _inherits(Connection, _EventEmitter);
 
   function Connection(ipc) {
-    var name = arguments.length <= 1 || arguments[1] === undefined ? '' : arguments[1];
+    var connInfo = arguments.length <= 1 || arguments[1] === undefined ? {
+      name: '',
+      app: ''
+    } : arguments[1];
 
     _classCallCheck(this, Connection);
 
@@ -31,14 +72,13 @@ var Connection = (function (_EventEmitter) {
     _this.id = uuid.v4();
     _this.name = name;
 
-    ipc.sendSync('/register', {
+    ipc.sendSync(pcolNS.REGISTER, {
       id: _this.id,
       data: {
-        meta: {
-          name: _this.name,
+        meta: _.extend(connInfo, {
           id: _this.id,
           version: process.versions.electron
-        }
+        })
       }
     });
     return _this;
@@ -47,7 +87,7 @@ var Connection = (function (_EventEmitter) {
   _createClass(Connection, [{
     key: 'on',
     value: function on(chan, cb) {
-      ipc.sendSync('/sub', {
+      ipc.sendSync(pcolNS.SUB, {
         id: this.id,
         data: chan
       });
@@ -56,8 +96,16 @@ var Connection = (function (_EventEmitter) {
     }
   }, {
     key: 'emit',
-    value: function emit(chan, data) {
-      ipc.sendSync('/pub', {
+    value: function emit(chan) {
+      for (var _len = arguments.length, data = Array(_len > 1 ? _len - 1 : 0), _key = 1; _key < _len; _key++) {
+        data[_key - 1] = arguments[_key];
+      }
+
+      // let pairAction = pair? '/direct': '',
+      // 	action = '/pub' + pairAction;
+      var action = pcolNS.PUB;
+
+      ipc.sendSync(action, {
         id: this.id,
         data: {
           chan: chan,
@@ -65,10 +113,75 @@ var Connection = (function (_EventEmitter) {
         }
       });
     }
+
+    // "server" side
+
+  }, {
+    key: 'bind',
+    value: function bind(id, chan) {
+      var _this2 = this;
+
+      return new Promise(function (resolve, reject) {
+
+        // has to go before the request
+        console.log("I WANT", '/resolve/' + id + '/' + chan);
+        ipc.once('/resolve/' + id + '/' + chan, function (token) {
+          console.log('huzza', token);
+
+          // return the sending function
+          resolve(function () {
+            for (var _len2 = arguments.length, data = Array(_len2), _key2 = 0; _key2 < _len2; _key2++) {
+              data[_key2] = arguments[_key2];
+            }
+
+            ipc.sendSync(pcolNS.SEND, {
+              id: _this2.id,
+              data: {
+                chan: chan,
+                data: data
+              }
+            });
+          });
+        });
+
+        // register the binding
+        ipc.sendSync(pcolNS.BIND, {
+          id: _this2.id,
+          data: {
+            id: id,
+            chan: chan
+          }
+        });
+      });
+    }
+
+    // "client side"
+
+  }, {
+    key: 'connect',
+    value: function connect(bindToId, chan, cb) {
+      var chanString = this.id + '/' + chan;
+
+      ipc.sendSync(pcolNS.CONNECT, {
+        id: this.id,
+        data: {
+          bindToId: bindToId,
+          chan: chan
+        }
+      });
+
+      //register locally
+      ipc.on(chanString, cb);
+
+      // return the close function
+      return function () {
+        ipc.removeListener(chanString, cb);
+      };
+    }
   }, {
     key: 'removeListener',
     value: function removeListener(chan, callback) {
-      ipc.sendSync('/unsub', {
+      ipc.sendSync(pcolNS.UNSUB, {
         id: this.id,
         data: {
           chan: chan
@@ -80,12 +193,12 @@ var Connection = (function (_EventEmitter) {
   }, {
     key: 'listConnections',
     value: function listConnections() {
-      return ipc.sendSync('/list-connections');
+      return ipc.sendSync(pcolNS.LIST_CONNECTIONS);
     }
   }]);
 
   return Connection;
-})(EventEmitter);
+})(EventEmitter); // end Connection class
 
 var Server = (function (_EventEmitter2) {
   _inherits(Server, _EventEmitter2);
@@ -95,41 +208,101 @@ var Server = (function (_EventEmitter2) {
 
     //a store of meta info (used for resolving names?)
 
-    var _this2 = _possibleConstructorReturn(this, Object.getPrototypeOf(Server).call(this));
+    var _this3 = _possibleConstructorReturn(this, Object.getPrototypeOf(Server).call(this));
 
-    _this2.connectionList = [];
+    _this3.connectionList = [];
 
-    ipc.on('/register', function (evnt, arg) {
-      console.log('register', arg);
-      _this2.connectionList.push(arg.data.meta);
-      console.log(_this2.connectionList);
+    /**********************************************************************
+    connection to connection 
+     *********************************************************************/
+
+    // publish to a particular conn/topic combination
+    ipc.on(pcolNS.BIND, function (evnt, arg) {
+
+      var resConnect = '/resolve/' + arg.data.id + '/' + arg.data.chan + '/connect',
+          resBind = '/resolve/' + arg.data.id + '/' + arg.data.chan + '/bind',
+          token = undefined;
+
+      _this3.once(resBind, function (resolvedToken) {
+        token = resolvedToken;
+
+        console.log('RES THIS!', '/resolve/' + arg.data.id + '/' + arg.data.chan);
+        evnt.sender.send('/resolve/' + arg.data.id + '/' + arg.data.chan, token);
+        _this3.emit(resConnect, null); // clear any pending
+      });
+
+      //order is important here, need to be listening first...
+      _this3.emit(resConnect, null);
+
+      // check if anyone is listening, return t/f
       evnt.returnValue = true;
     });
 
-    ipc.on('/unsub', function (evnt, arg) {
+    ipc.on(pcolNS.SEND, function (evnt, arg) {
+      evnt.returnValue = true;
+      var chan = arg.data.chan;
+
+      _this3.emit('/send/' + arg.id + '/' + chan, arg.data);
+    });
+
+    // subscribe to a particular conn/topic combination
+    ipc.on(pcolNS.CONNECT, function (evnt, arg) {
+      //add the lister combo to the list
+      var bindToId = arg.data.bindToId,
+          chan = arg.data.chan;
+
+      _this3.on('/send/' + bindToId + '/' + chan, (function () {
+
+        return function (data, reqId) {
+          if (reqId) {
+            return id;
+          } else {
+            evnt.sender.send(arg.id + '/' + arg.data.chan, data);
+          }
+        };
+      })());
+
+      var token = uuid.v4(),
+          resBind = '/resolve/' + bindToId + '/' + chan + '/bind',
+          resConnect = '/resolve/' + bindToId + '/' + chan + '/connect';
+
+      _this3.once(resConnect, function (resolvedToken) {
+        _this3.emit(resBind, token);
+      });
+      _this3.emit(resBind, token);
+
+      evnt.returnValue = true;
+    });
+
+    /**********************************************************************
+    general pub-sub 
+     *********************************************************************/
+    ipc.on(pcolNS.UNSUB, function (evnt, arg) {
       evnt.returnValue = true;
 
-      var listener = _this2.listeners('/pub/' + arg.data.chan).filter(function (listener) {
+      var listener = _this3.listeners(pcolNS.pub(arg.data.chan)).filter(function (listener) {
+
+        // Calling the listener with 2 arguments will return the
+        // stamped id, we can filter on this.
         return listener(null, 1) === arg.id;
       });
 
+      // Should this handle an array???
       if (listener[0]) {
-        _this2.removeListener('/pub/' + arg.data.chan, listener[0]);
+        _this3.removeListener(pcolNS.pub(arg.data.chan), listener[0]);
       }
     });
 
-    ipc.on('/list-connections', function (evnt, arg) {
-      evnt.returnValue = _this2.connectionList;
-    });
-
-    ipc.on('/sub', function (evnt, arg) {
+    ipc.on(pcolNS.SUB, function (evnt, arg) {
       evnt.returnValue = true;
       var id = arg.id,
           senderId = evnt.sender.getId();
 
       //subscribe locally
-      _this2.on('/pub/' + arg.data, (function () {
+      _this3.on(pcolNS.pub(arg.data), (function () {
+
         return function (data, reqId) {
+
           if (reqId) {
             return id;
           } else {
@@ -139,19 +312,32 @@ var Server = (function (_EventEmitter2) {
       })());
     });
 
-    ipc.on('/pub', function (evnt, arg) {
+    ipc.on(pcolNS.PUB, function (evnt, arg) {
       evnt.returnValue = true;
 
+      console.log(arg);
+
       //emit it locally
-      _this2.emit('/pub/' + arg.data.chan, arg.data.data);
+      _this3.emit(pcolNS.pub(arg.data.chan), arg);
     });
-    return _this2;
-  }
+
+    /**********************************************************************
+    util functions
+     *********************************************************************/
+    ipc.on(pcolNS.REGISTER, function (evnt, arg) {
+      _this3.connectionList.push(arg.data.meta);
+      evnt.returnValue = true;
+    });
+
+    ipc.on(pcolNS.LIST_CONNECTIONS, function (evnt, arg) {
+      evnt.returnValue = _this3.connectionList;
+    });
+
+    return _this3;
+  } //end constructor
 
   return Server;
-})(EventEmitter);
-
-//module.exports.Bus = Bus;
+})(EventEmitter); // end Server class
 
 module.exports.Server = Server;
 module.exports.Connection = Connection;

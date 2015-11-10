@@ -39,24 +39,26 @@ app.on('ready', function() {
         width: 800,
         height: 600
     });
-    win_b = new BrowserWindow({
-        width: 800,
-        height: 600
-    });
 
     // and load the index.html of the app.
     win_a.loadUrl('file://' + __dirname + '/a.html');
-    win_b.loadUrl('file://' + __dirname + '/b.html');
 
-
-
-    win_a.webContents.on('did-finish-load', function() {
+        win_a.webContents.on('did-finish-load', function() {
         win_a.webContents.send('heythere', 'whoooooooh!');
     });
-
-    // // Open the DevTools.
+    // Open the DevTools.
     win_a.openDevTools();
-    win_b.openDevTools();
+
+
+    // win_b = new BrowserWindow({
+    //     width: 800,
+    //     height: 600
+    // });
+    // win_b.loadUrl('file://' + __dirname + '/b.html');
+    // win_b.openDevTools();
+
+
+
 
 
     // anotherWindow = new BrowserWindow({width: 800, height: 600});
